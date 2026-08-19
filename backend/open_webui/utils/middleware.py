@@ -3357,6 +3357,7 @@ def build_response_object(response, response_data):
 
 
 def update_assistant_message_from_stream(assistant_message, raw):
+    # Deltas are buffered (str += recopies the whole text each time); finalize_assistant_message joins them.
     line = raw.decode('utf-8', 'replace') if isinstance(raw, bytes) else raw
     if not isinstance(line, str):
         return
@@ -3364,9 +3365,9 @@ def update_assistant_message_from_stream(assistant_message, raw):
     def append_output_text(item, text):
         parts = item.setdefault('content', [])
         if parts and parts[-1].get('type') == 'output_text':
-            parts[-1]['text'] += text
+            parts[-1].setdefault('_text_chunks', []).append(text)
         else:
-            parts.append({'type': 'output_text', 'text': text})
+            parts.append({'type': 'output_text', 'text': '', '_text_chunks': [text]})
 
     for raw_part in line.splitlines():
         part = raw_part.removeprefix('data:').strip()
@@ -3396,8 +3397,13 @@ def update_assistant_message_from_stream(assistant_message, raw):
 
         for choice in data.get('choices', []):
             delta = choice.get('delta', {}) or {}
+            # content and reasoning deltas are raw JSON: a stream filter can make them any type
             content = delta.get('content')
+            if content and not isinstance(content, str):
+                content = f'{content}'
             reasoning_content = delta.get('reasoning_content') or delta.get('reasoning') or delta.get('thinking')
+            if reasoning_content and not isinstance(reasoning_content, str):
+                reasoning_content = f'{reasoning_content}'
 
             if reasoning_content:
                 output = assistant_message.setdefault('output', [])
@@ -3439,7 +3445,27 @@ def update_assistant_message_from_stream(assistant_message, raw):
 
                     append_output_text(output[-1], content)
 
-                assistant_message['content'] = assistant_message.get('content', '') + content
+                assistant_message.setdefault('_content_chunks', []).append(content)
+
+
+def finalize_assistant_message(assistant_message):
+    """Join the text chunks buffered by update_assistant_message_from_stream."""
+    for item in assistant_message.get('output', []):
+        # Responses-API events insert output items verbatim from the upstream payload
+        if not isinstance(item, dict):
+            continue
+        parts = item.get('content')
+        if not isinstance(parts, list):
+            continue
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            chunks = part.pop('_text_chunks', None)
+            if chunks:
+                part['text'] = ''.join(chunks)
+    chunks = assistant_message.pop('_content_chunks', None)
+    if chunks:
+        assistant_message['content'] = ''.join(chunks)
 
 
 async def get_system_oauth_token(request, user):
@@ -6108,6 +6134,7 @@ async def streaming_chat_response_handler(response, ctx):
                     yield data
 
             if has_api_outlet_filters and assistant_message:
+                finalize_assistant_message(assistant_message)
                 ctx['assistant_message'] = assistant_message
                 await outlet_filter_handler(ctx)
 
