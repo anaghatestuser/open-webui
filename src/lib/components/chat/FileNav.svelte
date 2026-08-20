@@ -1511,6 +1511,7 @@
 			{#if previewPort !== null}
 				<PortPreview
 					baseUrl={selectedTerminal?.url ?? ''}
+					apiKey={selectedTerminal?.key ?? ''}
 					port={previewPort}
 					overlay={overlay || isDraggingHandle}
 					onClose={() => {
