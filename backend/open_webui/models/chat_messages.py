@@ -129,8 +129,8 @@ class ChatMessage(Base):
 
     # Identity
     id = Column(Text, primary_key=True)
-    chat_id = Column(Text, ForeignKey('chat.id', ondelete='CASCADE'), nullable=False, index=True)
-    user_id = Column(Text, index=True)
+    chat_id = Column(Text, ForeignKey('chat.id', ondelete='CASCADE'), nullable=False)
+    user_id = Column(Text)
 
     # Structure
     role = Column(Text, nullable=False)  # user, assistant, system
@@ -141,7 +141,7 @@ class ChatMessage(Base):
     output = Column(JSON, nullable=True)
 
     # Model (for assistant messages)
-    model_id = Column(Text, nullable=True, index=True)
+    model_id = Column(Text, nullable=True)
 
     # Attachments
     files = Column(JSON, nullable=True)
@@ -168,6 +168,7 @@ class ChatMessage(Base):
         Index('chat_message_chat_parent_idx', 'chat_id', 'parent_id'),
         Index('chat_message_model_created_idx', 'model_id', 'created_at'),
         Index('chat_message_user_created_idx', 'user_id', 'created_at'),
+        Index('chat_message_chat_role_done_idx', 'chat_id', 'role', 'done'),  # unfinished-assistant probe
     )
 
 
