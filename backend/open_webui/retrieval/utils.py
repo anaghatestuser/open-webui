@@ -869,10 +869,9 @@ def generate_openai_batch_embeddings(
     if isinstance(RAG_EMBEDDING_PREFIX_FIELD_NAME, str) and isinstance(prefix, str):
         json_data[RAG_EMBEDDING_PREFIX_FIELD_NAME] = prefix
 
-    headers = {
-        'Content-Type': 'application/json',
-        'Authorization': f'Bearer {key}',
-    }
+    headers = {'Content-Type': 'application/json'}
+    if key:
+        headers['Authorization'] = f'Bearer {key}'
     if ENABLE_FORWARD_USER_INFO_HEADERS and user:
         headers = include_user_info_headers(headers, user)
 
@@ -902,10 +901,9 @@ async def agenerate_openai_batch_embeddings(
     if isinstance(RAG_EMBEDDING_PREFIX_FIELD_NAME, str) and isinstance(prefix, str):
         form_data[RAG_EMBEDDING_PREFIX_FIELD_NAME] = prefix
 
-    headers = {
-        'Content-Type': 'application/json',
-        'Authorization': f'Bearer {key}',
-    }
+    headers = {'Content-Type': 'application/json'}
+    if key:
+        headers['Authorization'] = f'Bearer {key}'
     if ENABLE_FORWARD_USER_INFO_HEADERS and user:
         headers = include_user_info_headers(headers, user)
 
@@ -1021,10 +1019,9 @@ def generate_ollama_batch_embeddings(
     if isinstance(RAG_EMBEDDING_PREFIX_FIELD_NAME, str) and isinstance(prefix, str):
         json_data[RAG_EMBEDDING_PREFIX_FIELD_NAME] = prefix
 
-    headers = {
-        'Content-Type': 'application/json',
-        'Authorization': f'Bearer {key}',
-    }
+    headers = {'Content-Type': 'application/json'}
+    if key:
+        headers['Authorization'] = f'Bearer {key}'
     if ENABLE_FORWARD_USER_INFO_HEADERS and user:
         headers = include_user_info_headers(headers, user)
 
@@ -1057,10 +1054,9 @@ async def agenerate_ollama_batch_embeddings(
     if isinstance(RAG_EMBEDDING_PREFIX_FIELD_NAME, str) and isinstance(prefix, str):
         form_data[RAG_EMBEDDING_PREFIX_FIELD_NAME] = prefix
 
-    headers = {
-        'Content-Type': 'application/json',
-        'Authorization': f'Bearer {key}',
-    }
+    headers = {'Content-Type': 'application/json'}
+    if key:
+        headers['Authorization'] = f'Bearer {key}'
     if ENABLE_FORWARD_USER_INFO_HEADERS and user:
         headers = include_user_info_headers(headers, user)
 
