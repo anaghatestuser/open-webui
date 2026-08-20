@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import time
 import uuid
 
@@ -10,6 +11,8 @@ import pycrdt as Y
 from open_webui.env import REDIS_KEY_PREFIX
 from open_webui.utils.json_codec import JSONCodec
 from open_webui.utils.redis import get_redis_connection
+
+log = logging.getLogger(__name__)
 
 YDOC_KEY_PREFIX = f'{REDIS_KEY_PREFIX}:ydoc:documents'
 
@@ -172,7 +175,8 @@ class CachedRedisDict(RedisDict):
     """Answers reads from a per-process snapshot, refetched at most once per TTL.
 
     Only suitable for rarely-changing data: the values are shared between concurrent
-    readers, and another worker's writes lag by up to the TTL.
+    readers, and another worker's writes lag by up to the TTL.  When a refetch fails,
+    reads serve the last snapshot (empty if none succeeded yet) until the next attempt.
     """
 
     TTL_SECONDS = 5
@@ -183,10 +187,13 @@ class CachedRedisDict(RedisDict):
         self._cache_expires_at = 0.0
 
     def _snapshot(self) -> dict:
-        now = time.monotonic()
-        if now >= self._cache_expires_at:
-            self._cache = {k: JSONCodec.loads(v) for k, v in self.redis.hgetall(self.name).items()}
-            self._cache_expires_at = now + self.TTL_SECONDS
+        if time.monotonic() >= self._cache_expires_at:
+            try:
+                self._cache = {k: JSONCodec.loads(v) for k, v in self.redis.hgetall(self.name).items()}
+            except Exception as e:
+                log.warning(f'Failed to refetch {self.name} snapshot (serving {len(self._cache)} stale entries): {e!r}')
+            # Deadline from after the fetch: a call that blocks past the TTL would otherwise retry on every read.
+            self._cache_expires_at = time.monotonic() + self.TTL_SECONDS
         return self._cache
 
     def __getitem__(self, key):
