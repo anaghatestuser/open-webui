@@ -7,6 +7,7 @@ from open_webui.constants import ERROR_MESSAGES
 from open_webui.events import EVENTS, publish_event
 from open_webui.internal.db import get_async_session
 from open_webui.models.automations import (
+    AutomationBulkToggleForm,
     AutomationForm,
     AutomationListResponse,
     AutomationModel,
@@ -87,7 +88,13 @@ async def check_automation_limits(request, user, rrule_str: str, db, is_create: 
     if min_interval:
         min_interval = int(min_interval)
         if min_interval > 0:
-            interval = rrule_interval_seconds(rrule_str)
+            try:
+                interval = await rrule_interval_seconds(rrule_str)
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=str(e),
+                )
             if interval is not None and interval < min_interval:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -150,7 +157,7 @@ async def enrich_automation(automation: AutomationModel, db: AsyncSession, tz: s
     return AutomationResponse(
         **automation.model_dump(),
         last_run=last_run,
-        next_runs=next_n_runs_ns(automation.data['rrule'], tz=tz),
+        next_runs=await next_n_runs_ns(automation.data['rrule'], tz=tz),
     )
 
 
@@ -215,8 +222,11 @@ async def create_new_automation(
     await check_automations_permission(request, user)
     await check_automation_folder_access(form_data.folder_id, user, db)
     await check_automation_channel_access(form_data, user, db)
+
+    tz = user.timezone
     try:
-        validate_rrule(form_data.data.rrule, tz=user.timezone)
+        await validate_rrule(form_data.data.rrule, tz=tz)
+        next_run_at = await next_run_ns(form_data.data.rrule, tz=tz)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -225,8 +235,7 @@ async def create_new_automation(
 
     await check_automation_limits(request, user, form_data.data.rrule, db, is_create=True)
 
-    tz = user.timezone
-    automation = await Automations.insert(user.id, form_data, next_run_ns(form_data.data.rrule, tz=tz), db=db)
+    automation = await Automations.insert(user.id, form_data, next_run_at, db=db)
     response = await enrich_automation(automation, db, tz=tz)
     await publish_event(
         request,
@@ -236,6 +245,47 @@ async def create_new_automation(
         data={'name': automation.name, 'is_active': automation.is_active, 'folder_id': automation.folder_id},
     )
     return response
+
+
+############################
+# ToggleAllAutomations
+############################
+
+
+@router.post('/toggle/all')
+async def toggle_all_automations(
+    request: Request,
+    form_data: AutomationBulkToggleForm,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Enable/disable every automation matching the given filters.
+
+    The filters mirror /list, so the action covers the entire filtered set
+    instead of only the page the client currently has loaded.
+    """
+    await check_automations_permission(request, user)
+
+    count = await Automations.set_active_by_search(
+        user_id=user.id,
+        is_active=form_data.is_active,
+        query=form_data.query,
+        status=form_data.status,
+        folder_id=form_data.folder_id,
+        tz=user.timezone,
+        db=db,
+    )
+
+    if count:
+        await publish_event(
+            request,
+            EVENTS.AUTOMATION_ENABLED if form_data.is_active else EVENTS.AUTOMATION_DISABLED,
+            actor=user,
+            subject_type='automation',
+            data={'count': count},
+        )
+
+    return {'count': count}
 
 
 ############################
@@ -275,8 +325,10 @@ async def update_automation_by_id(
     await check_automation_folder_access(form_data.folder_id, user, db)
     await check_automation_channel_access(form_data, user, db)
 
+    tz = user.timezone
     try:
-        validate_rrule(form_data.data.rrule, tz=user.timezone)
+        await validate_rrule(form_data.data.rrule, tz=tz)
+        next_run_at = await next_run_ns(form_data.data.rrule, tz=tz)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -285,8 +337,7 @@ async def update_automation_by_id(
 
     await check_automation_limits(request, user, form_data.data.rrule, db, is_create=False)
 
-    tz = user.timezone
-    updated = await Automations.update_by_id(id, form_data, next_run_ns(form_data.data.rrule, tz=tz), db=db)
+    updated = await Automations.update_by_id(id, form_data, next_run_at, db=db)
     response = await enrich_automation(updated, db, tz=tz)
     await publish_event(
         request,
@@ -313,7 +364,15 @@ async def toggle_automation_by_id(
     await check_automations_permission(request, user)
     automation = await Automations.get_by_id(id, db=db)
     check_automation_access(automation, user)
-    toggled = await Automations.toggle(id, next_run_ns(automation.data['rrule'], tz=user.timezone), db=db)
+    is_active = not automation.is_active
+    try:
+        next_run_at = await next_run_ns(automation.data['rrule'], tz=user.timezone) if is_active else None
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    toggled = await Automations.toggle(id, next_run_at, is_active, db=db)
     response = await enrich_automation(toggled, db, tz=user.timezone)
     await publish_event(
         request,
