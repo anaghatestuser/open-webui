@@ -8,7 +8,9 @@ import time
 import uuid
 
 # local imports
+from open_webui.env import ENABLE_ADMIN_CHAT_ACCESS
 from open_webui.internal.db import Base, JSONField, get_async_db_context
+from open_webui.models.access_grants import AccessGrants
 from open_webui.models.automations import AutomationRun
 from open_webui.models.chat_messages import ChatMessage, ChatMessages
 from open_webui.models.folders import Folders
@@ -966,18 +968,15 @@ class ChatTable:
         """Write messages to the ``chat_message`` table so future lookups
         use the fast path.  Errors are logged but never raised.
         """
-        for message_id, message in messages.items():
-            if not isinstance(message, dict) or not message.get('role'):
-                continue
-            try:
-                await ChatMessages.upsert_message(
-                    message_id=message_id,
-                    chat_id=chat_id,
-                    user_id=user_id,
-                    data=message,
-                )
-            except Exception as e:
-                log.warning('Backfill failed for message %s in chat %s: %s', message_id, chat_id, e)
+        writable = {
+            message_id: message
+            for message_id, message in messages.items()
+            if isinstance(message, dict) and message.get('role')
+        }
+        try:
+            await ChatMessages.upsert_messages(chat_id, user_id, writable)
+        except Exception as e:
+            log.warning('Backfill failed for chat %s: %s', chat_id, e)
 
     async def reconcile_messages_by_chat_id(self, chat_id: str, user_id: str, messages: dict[str, dict]) -> None:
         """Sync ``chat_message`` rows with the committed JSON blob.
@@ -1071,6 +1070,7 @@ class ChatTable:
                 message['content'] = output_text
 
         message = self._clean_null_bytes(message)
+        message_id = self._clean_null_bytes(message_id)
 
         try:
             async with get_async_db_context() as session:
@@ -1143,9 +1143,8 @@ class ChatTable:
     async def add_message_status_to_chat_by_id_and_message_id(
         self, id: str, message_id: str, status: dict
     ) -> ChatModel | None:
-        status = self._clean_null_bytes(status)
-
         try:
+            status = self._clean_null_bytes(status)
             async with get_async_db_context() as session:
                 chat_item = await session.get(Chat, id)
                 if chat_item is None:
@@ -1633,6 +1632,41 @@ class ChatTable:
                 return ChatModel.model_validate(chat)
         except Exception:
             return None
+
+    async def get_chat_by_id_for_user(
+        self,
+        id: str,
+        user,
+        db: AsyncSession | None = None,
+    ) -> ChatModel | None:
+        chat = await self.get_chat_by_id_and_user_id(id, user.id, db=db)
+        if chat:
+            return chat
+
+        chat = await self.get_chat_by_id(id, db=db)
+        if not chat:
+            return None
+
+        if user.role == 'admin' and (ENABLE_ADMIN_CHAT_ACCESS or is_internal_chat(chat.meta)):
+            return chat
+
+        if await AccessGrants.has_access(
+            user_id=user.id,
+            resource_type='shared_chat',
+            resource_id=id,
+            permission='read',
+            db=db,
+        ):
+            return chat
+
+        if chat.folder_id:
+            from open_webui.utils.access_control.folders import has_folder_access
+
+            folder = await Folders.get_folder_by_id(chat.folder_id, db=db)
+            if folder and await has_folder_access(user.id, folder, 'read', db):
+                return chat
+
+        return None
 
     async def is_chat_owner(self, id: str, user_id: str, db: AsyncSession | None = None) -> bool:
         """

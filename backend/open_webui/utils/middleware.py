@@ -1613,11 +1613,10 @@ async def add_file_context(messages: list, chat_id: str, user) -> list:
     stored_messages = get_message_list(history.get('messages', {}), history.get('currentId'))
 
     def format_file_tag(file):
-        file_id = file.get('id') or file.get('url')
-        attrs = f'type="{file.get("type", "file")}"'
-        if file_id:
-            attrs += f' id="{file_id}"'
-        attrs += f' url="{file["url"]}"'
+        # Every file reaching here has a url or a chat id, so id is always set.
+        attrs = f'type="{file.get("type", "file")}" id="{file.get("id") or file.get("url")}"'
+        if file.get('url'):
+            attrs += f' url="{file["url"]}"'
         if file.get('content_type'):
             attrs += f' content_type="{file["content_type"]}"'
         if file.get('name'):
@@ -1634,15 +1633,17 @@ async def add_file_context(messages: list, chat_id: str, user) -> list:
     stored_user_messages = [m for m in stored_messages if m.get('role') == 'user']
 
     for message, stored_message in zip(user_messages, stored_user_messages):
-        files_with_urls = [
+        # Chat references carry no url - they are addressed by id via view_chat.
+        attached_files = [
             file
             for file in stored_message.get('files', [])
-            if file.get('url') and not file.get('url').startswith('data:')
+            if (file.get('url') and not file.get('url').startswith('data:'))
+            or (file.get('type') == 'chat' and file.get('id'))
         ]
-        if not files_with_urls:
+        if not attached_files:
             continue
 
-        file_tags = [format_file_tag(file) for file in files_with_urls]
+        file_tags = [format_file_tag(file) for file in attached_files]
         file_context = '<attached_files>\n' + '\n'.join(file_tags) + '\n</attached_files>\n\n'
 
         content = message.get('content', '')
@@ -2609,7 +2610,9 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     if is_saved_chat_id(metadata.get('chat_id')):
         chat = await Chats.get_chat_by_id(metadata['chat_id'])
 
-    if chat and (chat.meta or {}).get('internal') is True and (chat.meta or {}).get('type') == 'note':
+    is_note_chat = bool(chat and (chat.meta or {}).get('internal') is True and (chat.meta or {}).get('type') == 'note')
+
+    if is_note_chat:
         note_id = (chat.meta or {}).get('note_id')
         note = await Notes.get_note_by_id(note_id) if note_id else None
         if note and (
@@ -2632,9 +2635,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             if note_files:
                 files = [*(files or []), *note_files]
 
-    use_builtin_tools = (
-        chat and (chat.meta or {}).get('internal') is True and (chat.meta or {}).get('type') == 'note'
-    ) or (
+    use_builtin_tools = is_note_chat or (
         bool(metadata.get('session_id'))
         and metadata.get('params', {}).get('function_calling') != 'legacy'
         and (model.get('info', {}).get('meta', {}).get('capabilities') or {}).get('builtin_tools', True)
@@ -2643,9 +2644,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     if skill_ids:
         from open_webui.models.skills import Skills as SkillsModel
 
-        # Reuse the rows from the access query instead of re-fetching each
-        # skill by id.
-        accessible_skills = {s.id: s for s in await SkillsModel.get_skills_by_user_id(user.id, 'read')}
+        accessible_skills = {s.id: s for s in await SkillsModel.get_skills(user_id=user.id, ids=skill_ids)}
         for sid in skill_ids:
             s = accessible_skills.get(sid)
             if s and s.is_active:
@@ -2886,6 +2885,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 },
                 features,
                 model,
+                is_note_chat=is_note_chat,
             )
             for name, tool_dict in builtin_tools.items():
                 if name not in tools_dict:

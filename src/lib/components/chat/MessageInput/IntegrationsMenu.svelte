@@ -34,7 +34,6 @@
 		id: string;
 		name: string;
 		description?: string;
-		enabled: boolean;
 		meta?: { description?: string };
 		is_active?: boolean;
 		authenticated?: boolean;
@@ -113,8 +112,7 @@
 			a[tool.id] = {
 				...tool,
 				name: tool.name,
-				description: tool.meta?.description,
-				enabled: selectedToolIds.includes(tool.id)
+				description: tool.meta?.description
 			};
 			return a;
 		}, {});
@@ -130,8 +128,7 @@
 				items[`direct_server:${serverIdx}`] = {
 					id: `direct_server:${serverIdx}`,
 					name,
-					description: server.info.description ?? '',
-					enabled: selectedToolIds.includes(`direct_server:${serverIdx}`)
+					description: server.info.description ?? ''
 				};
 			}
 		}
@@ -150,8 +147,7 @@
 				a[skill.id] = {
 					...skill,
 					name: skill.name,
-					description: skill.description,
-					enabled: selectedSkillIds.includes(skill.id)
+					description: skill.description
 				};
 				return a;
 			}, {});
@@ -229,9 +225,7 @@
 			return;
 		}
 
-		tool.enabled = !tool.enabled;
-
-		const state = tool.enabled;
+		const state = !selectedToolIds.includes(toolId);
 		await tick();
 
 		if (state) {
@@ -245,9 +239,7 @@
 		const skill = skills?.[skillId];
 		if (!skill) return;
 
-		skill.enabled = !skill.enabled;
-
-		const state = skill.enabled;
+		const state = !selectedSkillIds.includes(skillId);
 		await tick();
 
 		if (state) {
@@ -268,6 +260,8 @@
 	{closeOnOutsideClick}
 	onOpenChange={(state) => {
 		if (state === false) {
+			toolQuery = '';
+			skillQuery = '';
 			onClose();
 		}
 	}}
@@ -482,6 +476,7 @@
 					<button
 						class="flex w-full justify-between gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer rounded-xl hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 						on:click={() => {
+							toolQuery = '';
 							tab = '';
 						}}
 					>
@@ -506,7 +501,7 @@
 									<button
 										class="relative flex w-full justify-between gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer rounded-xl hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 										aria-pressed={(tools?.[toolId]?.authenticated ?? true)
-											? tools?.[toolId]?.enabled
+											? selectedToolIds.includes(toolId)
 											: undefined}
 										on:click={async (e) => {
 											await toggleTool(toolId, e);
@@ -584,7 +579,7 @@
 										{/if}
 
 										<div class=" shrink-0" inert>
-											<Switch state={tools?.[toolId]?.enabled} />
+											<Switch state={selectedToolIds.includes(toolId)} />
 										</div>
 									</button>
 								{/each}
@@ -597,6 +592,7 @@
 					<button
 						class="flex w-full justify-between gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer rounded-xl hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 						on:click={() => {
+							skillQuery = '';
 							tab = '';
 						}}
 					>
@@ -620,7 +616,7 @@
 								{#each skillIds as skillId}
 									<button
 										class="relative flex w-full justify-between gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer rounded-xl hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
-										aria-pressed={skills?.[skillId]?.enabled}
+										aria-pressed={selectedSkillIds.includes(skillId)}
 										on:click={async () => {
 											await toggleSkill(skillId);
 										}}
@@ -642,7 +638,7 @@
 										</div>
 
 										<div class=" shrink-0" inert>
-											<Switch state={skills?.[skillId]?.enabled} />
+											<Switch state={selectedSkillIds.includes(skillId)} />
 										</div>
 									</button>
 								{/each}
