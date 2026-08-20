@@ -283,6 +283,7 @@ class UsersTable:
         role: str = 'pending',
         username: str | None = None,
         oauth: dict | None = None,
+        scim: dict | None = None,
         db: AsyncSession | None = None,
     ) -> UserModel | None:
         try:
@@ -303,6 +304,7 @@ class UsersTable:
                     'updated_at': int(time.time()),
                     'username': username,
                     'oauth': oauth,
+                    'scim': scim,
                 }
             )
             result = User(**user.model_dump())
@@ -436,6 +438,10 @@ class UsersTable:
                             )
                         )
                     )
+
+                if filter.get('externally_managed'):
+                    # An absent identity is stored as the JSON literal null, not only as SQL NULL
+                    stmt = stmt.filter(or_(User.oauth.cast(String) != 'null', User.scim.cast(String) != 'null'))
 
                 roles = filter.get('roles')
                 if roles:
