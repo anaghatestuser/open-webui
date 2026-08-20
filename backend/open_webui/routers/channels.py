@@ -40,6 +40,7 @@ from open_webui.socket.main import (
     emit_to_users,
     enter_room_for_users,
     get_user_ids_from_room,
+    leave_rooms_for_users,
     sio,
 )
 from open_webui.utils.access_control import filter_allowed_access_grants, has_permission
@@ -588,6 +589,10 @@ async def update_is_active_member_by_id_and_user_id(
         subject_id=channel.id,
         data={'is_active': form_data.is_active},
     )
+    if not form_data.is_active:
+        # Deactivating membership revokes live subscription; evict the user's
+        # open sessions from the channel room so they stop receiving events.
+        await leave_rooms_for_users(f'channel:{channel.id}', [user.id])
     return True
 
 
@@ -671,6 +676,10 @@ async def remove_members_by_id(
             subject_id=channel.id,
             data={'user_ids': form_data.user_ids},
         )
+
+        if form_data.user_ids:
+            await leave_rooms_for_users(f'channel:{channel.id}', form_data.user_ids)
+
         return deleted
     except Exception as e:
         log.exception(e)
@@ -716,6 +725,18 @@ async def update_channel_by_id(
             subject_id=id,
             data={'name': channel.name, 'type': channel.type},
         )
+
+        # Access grants may have changed. Evict live subscribers who no longer
+        # belong — checked against the current membership/grant resolution.
+        room_name = f'channel:{id}'
+        for participant_user_id in get_user_ids_from_room(room_name):
+            try:
+                still_member = await Channels.is_user_channel_member(id, participant_user_id, db=db)
+            except Exception:
+                still_member = True  # Fail-open on transient errors; next mutation retries.
+            if not still_member:
+                await leave_rooms_for_users(room_name, [participant_user_id])
+
         return ChannelModel(**channel.model_dump())
     except Exception as e:
         log.exception(e)
@@ -752,6 +773,12 @@ async def delete_channel_by_id(
             subject_id=id,
             data={'name': channel.name, 'type': channel.type},
         )
+        # Tear down every open subscription to this channel room — no one has
+        # access after deletion.
+        try:
+            await sio.close_room(f'channel:{id}')
+        except Exception as e:
+            log.debug(f'Failed to close channel room {id}: {e}')
         return True
     except Exception as e:
         log.exception(e)
