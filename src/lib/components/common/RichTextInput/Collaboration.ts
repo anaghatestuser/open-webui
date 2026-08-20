@@ -43,6 +43,8 @@ export class SocketIOCollaborationProvider {
 	private synced = false;
 	private editor: Editor | null = null;
 	private editorContentGetter: EditorContentGetter | null = null;
+	private awarenessTimer: ReturnType<typeof setTimeout> | null = null;
+	private contentRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
 	constructor(
 		private readonly documentId: string,
@@ -84,6 +86,28 @@ export class SocketIOCollaborationProvider {
 		this.editorContentGetter = editorContentGetter;
 	}
 
+	private sendAwareness() {
+		this.awarenessTimer = null;
+		this.socket.emit('ydoc:awareness:update', {
+			document_id: this.documentId,
+			// only our own state ever changes locally
+			update: Array.from(this.awareness.encodeUpdate([this.awareness.clientID]))
+		});
+	}
+
+	// Ours is the merged copy, the sender of a remote edit had not seen our own edits yet.
+	private sendContentRefresh() {
+		this.contentRefreshTimer = null;
+
+		// unsynced means we hold a fragment of the document, not all of it, and would store that
+		if (!this.synced || !this.editor?.isEditable) return;
+
+		this.socket.emit('ydoc:document:update', {
+			document_id: this.documentId,
+			data: { content: this.editorContentGetter?.() }
+		});
+	}
+
 	private joinDocument() {
 		const userColor = generateUserColor();
 		this.socket.emit('ydoc:document:join', {
@@ -109,7 +133,11 @@ export class SocketIOCollaborationProvider {
 			if (data.document_id === this.documentId && data.socket_id !== this.socket.id) {
 				try {
 					const update = new Uint8Array(data.update);
-					Y.applyUpdate(this.doc, update);
+					// 'server' stops the local update listener sending this straight back out
+					Y.applyUpdate(this.doc, update, 'server');
+
+					if (this.contentRefreshTimer) clearTimeout(this.contentRefreshTimer);
+					this.contentRefreshTimer = setTimeout(() => this.sendContentRefresh(), 500);
 				} catch (error) {
 					console.error('Error applying Yjs update:', error);
 				}
@@ -209,27 +237,20 @@ export class SocketIOCollaborationProvider {
 						}
 					}
 				});
+
+				// this emit already carried the merged content a pending refresh would send
+				if (this.contentRefreshTimer) {
+					clearTimeout(this.contentRefreshTimer);
+					this.contentRefreshTimer = null;
+				}
 			}
 		});
 
-		// Listen for awareness updates from Yjs
-		this.awareness.on(
-			'change',
-			(
-				{ added, updated, removed }: { added: number[]; updated: number[]; removed: number[] },
-				origin: string
-			) => {
-				if (origin !== 'server' && this.isConnected) {
-					const changedClients = added.concat(updated).concat(removed);
-					const awarenessUpdate = this.awareness.encodeUpdate(changedClients);
-					this.socket.emit('ydoc:awareness:update', {
-						document_id: this.documentId,
-						user_id: this.socket.id,
-						update: Array.from(awarenessUpdate)
-					});
-				}
-			}
-		);
+		// Cursor state is a full snapshot, so coalescing only drops intermediate positions.
+		this.awareness.on('change', (_changes: unknown, origin: string) => {
+			if (origin === 'server' || !this.isConnected || this.awarenessTimer) return;
+			this.awarenessTimer = setTimeout(() => this.sendAwareness(), 100);
+		});
 
 		if (this.socket.connected) {
 			this.isConnected = true;
@@ -254,13 +275,26 @@ export class SocketIOCollaborationProvider {
 		this.socket.off('connect', this.onConnect);
 		this.socket.off('disconnect', this.onDisconnect);
 
+		// send a pending refresh rather than dropping it, we hold the only merged copy
+		if (this.contentRefreshTimer) {
+			clearTimeout(this.contentRefreshTimer);
+			this.sendContentRefresh();
+		}
+
+		// drop our caret for everyone else; the editor only clears it after we have left the room
+		this.awareness.setLocalStateField('cursor', null);
+		if (this.awarenessTimer) clearTimeout(this.awarenessTimer);
+
 		if (this.isConnected) {
+			this.sendAwareness();
 			this.socket.emit('ydoc:document:leave', {
 				document_id: this.documentId,
 				user_id: this.user?.id
 			});
 		}
 
+		// the editor tears down after us and clears its cursor, which must not schedule a new emit
+		this.isConnected = false;
 		this.editor = null;
 		this.editorContentGetter = null;
 	}

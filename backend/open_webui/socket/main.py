@@ -808,27 +808,28 @@ async def yjs_document_update(sid, data):
         except Exception:
             pass
 
-        user_id = data.get('user_id', sid)
+        update = data.get('update')  # absent when a client only refreshes the content to be saved
 
-        update = data['update']  # List of bytes from frontend
+        if update:
+            user_id = data.get('user_id', sid)
 
-        await YDOC_MANAGER.append_to_updates(
-            document_id=document_id,
-            update=update,  # Convert list of bytes to bytes
-        )
+            await YDOC_MANAGER.append_to_updates(
+                document_id=document_id,
+                update=update,
+            )
 
-        # Broadcast update to all other users in the document
-        await sio.emit(
-            'ydoc:document:update',
-            {
-                'document_id': document_id,
-                'user_id': user_id,
-                'update': update,
-                'socket_id': sid,  # Add socket_id to match frontend filtering
-            },
-            room=f'doc_{document_id}',
-            skip_sid=sid,
-        )
+            # Broadcast update to all other users in the document
+            await sio.emit(
+                'ydoc:document:update',
+                {
+                    'document_id': document_id,
+                    'user_id': user_id,
+                    'update': update,
+                    'socket_id': sid,  # Add socket_id to match frontend filtering
+                },
+                room=f'doc_{document_id}',
+                skip_sid=sid,
+            )
 
         async def debounced_save():
             await asyncio.sleep(0.5)
