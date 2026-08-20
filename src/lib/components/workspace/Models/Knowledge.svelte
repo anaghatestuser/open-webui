@@ -27,7 +27,7 @@
 	let filesInputElement = null;
 	let inputFiles = null;
 
-	$: if (selectedItems === null) {
+	$: if (!selectedItems) {
 		selectedItems = [];
 	}
 
