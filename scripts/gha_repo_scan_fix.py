@@ -974,36 +974,6 @@ def _execute_scan(args: argparse.Namespace) -> int:
     remediation_branch = ""
     failed_rem_files: List[str] = []
 
-    github_token = (
-        getattr(args, "github_token", None)
-        or os.environ.get("GH_TOKEN", "")
-        or os.environ.get("GITHUB_TOKEN", "")
-    )
-    if all_violations and github_token and getattr(args, "create_fix_pr", False):
-        logger.info(
-            "STEP 3: Applying fix_code patches for %d violation(s)", len(all_violations)
-        )
-        try:
-            validated_fixes, failed_rem_files, fix_table = apply_pipeline_fix_code_to_clone(
-                all_violations, source_path, file_list
-            )
-            logger.info(
-                "Patches applied: %d file(s); no fix_code: %d file(s)",
-                len(validated_fixes), len(failed_rem_files),
-            )
-            if validated_fixes:
-                remediation_pr_number, remediation_branch = _create_fix_pr(
-                    github_token, repo, branch, head_sha,
-                    validated_fixes, fix_table,
-                    report=combined_report, failed_files=failed_rem_files,
-                )
-            else:
-                logger.warning("No patches could be applied — skipping PR creation")
-        except Exception as exc:
-            logger.error("Remediation step failed: %s", exc)
-    elif all_violations:
-        logger.info("Skipping remediation — GITHUB_TOKEN / --github-token not set")
-
     output = build_json_output(
         status=status, repo=repo, branch=branch, head_sha=head_sha,
         source_code_repo=source_code_repo, files_scanned=len(file_list),
